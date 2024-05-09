@@ -62,6 +62,8 @@ async function main() {
     collectionNft,
     2 ** maxDepthSizePair.maxDepth
   )
+
+  await logNftDetails(treeAddress ,2** maxDepthSizePair.maxDepth)
 }
 
 // Demo Code Here
@@ -200,6 +202,27 @@ async function mintCompressedNftToCollection(
       console.error("\nFailed to mint compressed NFT:", err)
       throw err
     }
+  }
+}
+
+async function logNftDetails(treeAddress: PublicKey, nftsMinted: number) {
+  for (let i = 0; i < nftsMinted; i++) {
+    const assetId = await getLeafAssetId(treeAddress, new BN(i))
+    console.log("Asset ID:", assetId.toBase58())
+    const response = await fetch(process.env.RPC_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "my-id",
+        method: "getAsset",
+        params: {
+          id: assetId,
+        },
+      }),
+    })
+    const { result } = await response.json()
+    console.log(JSON.stringify(result, null, 2))
   }
 }
 
