@@ -63,10 +63,23 @@ async function main() {
     2 ** maxDepthSizePair.maxDepth
   )
 
-  await logNftDetails(treeAddress ,2** maxDepthSizePair.maxDepth)
+  const recieverWallet = await getOrCreateKeypair("Wallet_2")
+  const assetId = await getLeafAssetId(treeAddress, new BN(0))
+  await airdropSolIfNeeded(recieverWallet.publicKey)
+
+  console.log(`Transfering ${assetId.toString()} from ${wallet.publicKey.toString()} to ${recieverWallet.publicKey.toString()}`)
+
+  await transferNft(
+    connection,
+    assetId,
+    wallet,
+    recieverWallet.publicKey
+  )
+
+  await logNftDetails(treeAddress, 8)
+
 }
 
-// Demo Code Here
 
 async function createAndInitializeTree(
   connection: Connection,
@@ -225,5 +238,107 @@ async function logNftDetails(treeAddress: PublicKey, nftsMinted: number) {
     console.log(JSON.stringify(result, null, 2))
   }
 }
+
+
+async function transferNft(
+  connection: Connection,
+  assetId: PublicKey,
+  sender: Keypair,
+  receiver: PublicKey
+) {
+  try {
+    const assetDataResponse = await fetch(process.env.RPC_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "my-id",
+        method: "getAsset",
+        params: {
+          id: assetId,
+        },
+      }),
+    })
+    const assetData = (await assetDataResponse.json()).result
+
+    const assetProofResponse = await fetch(process.env.RPC_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "my-id",
+        method: "getAssetProof",
+        params: {
+          id: assetId,
+        },
+      }),
+    })
+    const assetProof = (await assetProofResponse.json()).result
+
+    const treePublicKey = new PublicKey(assetData.compression.tree)
+
+    const treeAccount = await ConcurrentMerkleTreeAccount.fromAccountAddress(
+      connection,
+      treePublicKey
+    )
+
+    const canopyDepth = treeAccount.getCanopyDepth() || 0
+
+    const proofPath: AccountMeta[] = assetProof.proof
+      .map((node: string) => ({
+        pubkey: new PublicKey(node),
+        isSigner: false,
+        isWritable: false,
+      }))
+      .slice(0, assetProof.proof.length - canopyDepth)
+
+    const treeAuthority = treeAccount.getAuthority()
+    const leafOwner = new PublicKey(assetData.ownership.owner)
+    const leafDelegate = assetData.ownership.delegate
+      ? new PublicKey(assetData.ownership.delegate)
+      : leafOwner
+
+    const transferIx = createTransferInstruction(
+      {
+        merkleTree: treePublicKey,
+        treeAuthority,
+        leafOwner,
+        leafDelegate,
+        newLeafOwner: receiver,
+        logWrapper: SPL_NOOP_PROGRAM_ID,
+        compressionProgram: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+        anchorRemainingAccounts: proofPath,
+      },
+      {
+        root: [...new PublicKey(assetProof.root.trim()).toBytes()],
+        dataHash: [
+          ...new PublicKey(assetData.compression.data_hash.trim()).toBytes(),
+        ],
+        creatorHash: [
+          ...new PublicKey(assetData.compression.creator_hash.trim()).toBytes(),
+        ],
+        nonce: assetData.compression.leaf_id,
+        index: assetData.compression.leaf_id,
+      }
+    )
+
+    const tx = new Transaction().add(transferIx)
+    tx.feePayer = sender.publicKey
+    const txSignature = await sendAndConfirmTransaction(
+      connection,
+      tx,
+      [sender],
+      {
+        commitment: "confirmed",
+        skipPreflight: true,
+      }
+    )
+    console.log(`https://explorer.solana.com/tx/${txSignature}?cluster=devnet`)
+  } catch (err: any) {
+    console.error("\nFailed to transfer nft:", err)
+    throw err
+  }
+}
+
 
 main()
